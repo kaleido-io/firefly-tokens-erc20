@@ -37,6 +37,7 @@ import {
   ApprovalEvent,
   ApprovalForAllEvent,
   AsyncResponse,
+  BlockchainTransaction,
   ContractSchema,
   EthConnectAsyncResponse,
   EthConnectMsgRequest,
@@ -45,6 +46,7 @@ import {
   ITokenPool,
   IValidTokenPool,
   TokenApproval,
+  TokenApprovalConfig,
   TokenApprovalEvent,
   TokenBurn,
   TokenBurnEvent,
@@ -52,6 +54,7 @@ import {
   TokenMintEvent,
   TokenPool,
   TokenPoolActivate,
+  TokenPoolConfig,
   TokenPoolEvent,
   TokenTransfer,
   TokenTransferEvent,
@@ -386,6 +389,10 @@ export class TokensService {
       type: dto.type,
       schema,
     };
+    
+    // Santiy check on the block number at this point (we don't use it until activation)
+    this.asNonZeroPositiveStringOrUndefined(dto.config.blockNumber)
+
     if (!this.validatePoolId(poolId)) {
       throw new BadRequestException('Invalid poolId');
     }
@@ -413,6 +420,34 @@ export class TokensService {
     };
 
     return tokenPoolEvent;
+  }
+
+  asNonZeroPositiveStringOrUndefined(val: any): string | undefined {
+    let valNumber = 0
+    if (typeof val == 'number') {
+      valNumber = val;
+    } else if (typeof val == 'string') {
+      try {
+        valNumber = parseInt(val as string)
+      } catch(err) {
+        throw new Error(`Invalid number string: ${val}`);
+      }
+    }
+    if (valNumber <= 0 || valNumber === NaN) {
+      return undefined;
+    }
+    return String(valNumber)
+}
+
+  getSubscriptionBlockNumber(poolConfig?: TokenPoolConfig, transaction?: BlockchainTransaction): string {
+    let blockNumber = '0';
+    const configBlockNumber = this.asNonZeroPositiveStringOrUndefined(poolConfig?.blockNumber);
+    if (configBlockNumber) {
+      blockNumber = configBlockNumber
+    } else if (transaction?.blockNumber) {
+      blockNumber = transaction.blockNumber;
+    }
+    return blockNumber;
   }
 
   async activatePool(dto: TokenPoolActivate) {
@@ -444,6 +479,9 @@ export class TokensService {
       method => method.name !== undefined && possibleMethods.includes(method.name),
     );
 
+    const blockNumber = this.getSubscriptionBlockNumber(dto.poolConfig, dto.transaction);
+    this.logger.log(`Activating from block number ${blockNumber} for address ${poolId.address} with config ${JSON.stringify(dto.poolConfig)}`)
+
     const promises = [
       this.eventstream.getOrCreateSubscription(
         `${this.baseUrl}`,
@@ -453,7 +491,7 @@ export class TokensService {
         packSubscriptionName(this.topic, dto.poolId, abiEvents.TRANSFER),
         poolId.address,
         methodsToSubTo,
-        dto.transaction?.blockNumber ?? '0',
+        blockNumber,
       ),
       this.eventstream.getOrCreateSubscription(
         `${this.baseUrl}`,
@@ -463,7 +501,7 @@ export class TokensService {
         packSubscriptionName(this.topic, dto.poolId, abiEvents.APPROVAL),
         poolId.address,
         methodsToSubTo,
-        dto.transaction?.blockNumber ?? '0',
+        blockNumber,
       ),
     ];
     if (abiEvents.APPROVALFORALL !== null) {
@@ -480,7 +518,7 @@ export class TokensService {
           packSubscriptionName(this.topic, dto.poolId, abiEvents.APPROVALFORALL),
           poolId.address,
           methodsToSubTo,
-          dto.transaction?.blockNumber ?? '0',
+          blockNumber,
         ),
       );
     }
