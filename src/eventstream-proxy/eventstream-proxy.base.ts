@@ -139,6 +139,7 @@ export abstract class EventStreamProxyBase extends WebSocketEventsBase {
     this.metrics.observeBatchInterval(batchIntervalMs);
 
     const messages: WebSocketMessage[] = [];
+    const events: Promise<any>[] = [];
     for (const event of batch.events) {
       this.logger.log(`Proxying event: ${JSON.stringify(event)}`);
       const subName = await this.getSubscriptionName(newContext(), event.subId);
@@ -149,26 +150,43 @@ export abstract class EventStreamProxyBase extends WebSocketEventsBase {
 
       for (const listener of this.eventListeners) {
         try {
-          await listener.onEvent(subName, event, (msg: WebSocketMessage | undefined) => {
-            if (msg !== undefined) {
-              messages.push(msg);
-            }
-          });
+          const nextPromise = listener.onEvent(
+            subName,
+            event,
+            (msg: WebSocketMessage | undefined) => {
+              if (msg !== undefined) {
+                messages.push(msg);
+              }
+            },
+          );
+
+          if (nextPromise) {
+            events.push(nextPromise);
+          }
         } catch (err) {
           this.logger.error(`Error processing event: ${err}`);
         }
       }
     }
-    const message: WebSocketMessageWithId = {
-      id: uuidv4(),
-      event: 'batch',
-      data: <WebSocketMessageBatchData>{
-        events: messages,
-      },
-      batchNumber: batch.batchNumber,
-    };
-    this.awaitingAck.push(message);
-    this.currentClient?.send(JSON.stringify(message));
+
+    this.logger.log(`Started a promise for ${events.length} events`);
+
+    // We now have an ordered array of promises
+    Promise.all(events).then(() => {
+      const message: WebSocketMessageWithId = {
+        id: uuidv4(),
+        event: 'batch',
+        data: <WebSocketMessageBatchData>{
+          events: messages,
+        },
+        batchNumber: batch.batchNumber,
+      };
+      this.logger.log(
+        `All promises complete. Sending batch ${batch.batchNumber} id ${message.id} to client`,
+      );
+      this.awaitingAck.push(message);
+      this.currentClient?.send(JSON.stringify(message));
+    });
 
     // Set the most-recent batch dispatch time to now so when the next ACK comes back from FF
     // we can set metrics accordingly
@@ -213,7 +231,9 @@ export abstract class EventStreamProxyBase extends WebSocketEventsBase {
     this.metrics.observeBatchAckInterval(timeWaitingForACKms);
 
     const inflight = this.awaitingAck.find(msg => msg.id === data.id);
-    this.logger.log(`Received ack ${data.id} inflight=${!!inflight}`);
+    this.logger.log(
+      `Received ack ${data.id} batch ${inflight?.batchNumber} inflight=${!!inflight}`,
+    );
     if (this.socket !== undefined && inflight !== undefined) {
       this.awaitingAck = this.awaitingAck.filter(msg => msg.id !== data.id);
       if (
