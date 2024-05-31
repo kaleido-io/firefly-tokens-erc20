@@ -2,20 +2,17 @@ ARG BASE_IMAGE
 ARG BUILD_IMAGE
 
 FROM ${BUILD_IMAGE} as build
-USER node
 WORKDIR /home/node
-ADD --chown=node:node package*.json ./
+ADD package*.json ./
 RUN npm install
-ADD --chown=node:node . .
+ADD . .
 RUN npm run build
 
 FROM ${BUILD_IMAGE} as solidity-build
-RUN apk add python3=3.10.14-r1 alpine-sdk=1.0-r1
-USER node
 WORKDIR /home/node
-ADD --chown=node:node ./samples/solidity/package*.json ./
+ADD ./samples/solidity/package*.json ./
 RUN npm install
-ADD --chown=node:node ./samples/solidity .
+ADD ./samples/solidity .
 RUN npx hardhat compile
 
 FROM alpine:3.19 AS SBOM
@@ -27,7 +24,6 @@ RUN trivy fs --format spdx-json --output /sbom.spdx.json /SBOM
 RUN trivy sbom /sbom.spdx.json --severity UNKNOWN,HIGH,CRITICAL --exit-code 1
 
 FROM $BASE_IMAGE
-RUN apk add curl=8.5.0-r0 jq=1.6-r2
 RUN mkdir -p /app/contracts/source \
     && chgrp -R 0 /app/ \
     && chmod -R g+rwX /app/ \
