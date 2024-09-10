@@ -18,6 +18,7 @@ RUN npx hardhat compile
 FROM alpine:3.19 AS SBOM
 WORKDIR /
 ADD . /SBOM
+ADD ./.trivyignore /.trivyignore
 RUN apk add --no-cache curl 
 RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin v0.48.3
 RUN trivy fs --format spdx-json --output /sbom.spdx.json /SBOM
@@ -44,6 +45,7 @@ WORKDIR /app
 COPY --from=build --chown=1001:0 /home/node/dist ./dist
 COPY --from=build --chown=1001:0 /home/node/package.json /home/node/package-lock.json ./
 COPY --from=SBOM /sbom.spdx.json /sbom.spdx.json
+COPY --from=SBOM /.trivyignore /.trivyignore
 
 RUN npm install --production
 EXPOSE 3000
